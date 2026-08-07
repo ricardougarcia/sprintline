@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sprintline &mdash; Product Planning Gantt</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <header class="toolbar">
+    <div class="brand">
+      <strong>Sprintline</strong>
+      <span>AUG 2026 &rarr; JAN 2028 &middot; PRODUCT PLANNING</span>
+    </div>
+
+    <button class="btn primary" id="uploadBtn">Upload CSV</button>
+    <input type="file" id="fileInput" accept=".csv,text/csv" hidden />
+    <button class="btn" id="downloadBtn">Download CSV</button>
+
+    <button class="btn" id="hlBtn">Highlight <span class="count" id="hlCount"></span> &#9662;</button>
+    <button class="btn filter-btn" id="fltBtn">Filter <span class="count" id="fltCount"></span> &#9662;</button>
+
+    <div class="tb-spacer"></div>
+    <p class="hint">Drag a bar to move it, drag its right edge to resize (snaps to 2-week sprints). Drag the dot on a bar to another item to link a dependency. Drag the grip to reorder rows. Click anything to edit.</p>
+    <button class="btn quiet" id="resetBtn">Reset data</button>
+  </header>
+
+  <main class="board" id="board">
+    <div class="board-inner" id="boardInner"></div>
+  </main>
+
+  <!-- highlight popover -->
+  <div class="popover" id="hlPop">
+    <div class="pop-head">
+      <input type="text" placeholder="Search values&hellip;" />
+      <button class="link">Clear</button>
+    </div>
+    <div class="pop-body"></div>
+  </div>
+
+  <!-- filter popover -->
+  <div class="popover" id="fltPop">
+    <div class="pop-head">
+      <input type="text" placeholder="Search values&hellip;" />
+      <button class="link">Clear</button>
+    </div>
+    <div class="pop-body"></div>
+  </div>
+
+  <!-- edit drawer -->
+  <div class="scrim" id="scrim"></div>
+  <aside class="drawer" id="drawer" aria-label="Edit item">
+    <div class="drawer-head">
+      <h2>Edit item</h2>
+      <button class="close" id="drawerClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+  <datalist id="parentList"></datalist>
+
+  <!-- dependency remove popup -->
+  <div class="dep-pop" id="depPop">
+    <span class="dep-text"></span>
+    <button class="del">Remove link</button>
+  </div>
+
+  <div class="drag-tip" id="dragTip"></div>
+  <div class="toast" id="toast"></div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
