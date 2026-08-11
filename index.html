@@ -24,6 +24,13 @@
     <button class="btn" id="hlBtn">Highlight <span class="count" id="hlCount"></span> &#9662;</button>
     <button class="btn filter-btn" id="fltBtn">Filter <span class="count" id="fltCount"></span> &#9662;</button>
 
+    <div class="seg" id="zoomSeg" title="Timeline zoom">
+      <button data-z="sprint" class="on">Sprint</button>
+      <button data-z="month">Month</button>
+      <button data-z="quarter">Quarter</button>
+    </div>
+    <button class="btn" id="collapseBtn">Collapse parents</button>
+
     <div class="tb-spacer"></div>
     <p class="hint">Drag a bar to move it, drag its right edge to resize (snaps to 2-week sprints). Drag the dot on a bar to another item to link a dependency. Drag the grip to reorder rows. Click anything to edit.</p>
     <button class="btn quiet" id="resetBtn">Reset data</button>
