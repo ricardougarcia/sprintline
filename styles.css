@@ -102,6 +102,29 @@ button { font: inherit; color: inherit; }
   line-height: 1.35;
 }
 
+/* zoom segmented control */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.seg button {
+  border: none;
+  background: var(--panel);
+  padding: 7px 11px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 120ms;
+}
+.seg button + button { border-left: 1px solid var(--hairline); }
+.seg button:hover { background: var(--paper); }
+.seg button.on {
+  background: var(--accent-soft);
+  color: var(--accent-deep);
+  font-weight: 600;
+}
+
 /* ---------- Popovers (highlight / filter) ---------- */
 .popover {
   position: fixed;
@@ -277,6 +300,33 @@ button { font: inherit; color: inherit; }
 }
 .row-title .k .parent { color: var(--accent-deep); }
 
+/* parent grouping */
+.row.parent .row-title .t { font-weight: 600; }
+.row-label .twist {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--slate);
+  font-size: 11px;
+  width: 16px;
+  padding: 0;
+  flex: none;
+}
+.row-label .twist:hover { color: var(--accent-deep); }
+.row-label.child-1 { padding-left: 22px; }
+.row-label.child-2 { padding-left: 38px; }
+.row-label.child-3 { padding-left: 54px; }
+.badge {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 0 5px;
+  color: var(--slate);
+  margin-left: 6px;
+}
+
 /* Lane + grid */
 .lane {
   position: relative;
@@ -368,6 +418,24 @@ button { font: inherit; color: inherit; }
 }
 .row.hl .bar .resize::after { background: rgba(61, 42, 5, 0.45); }
 .bar.link-target { outline: 2px dashed var(--dep); outline-offset: 2px; }
+
+/* derived rollup bar shown when a parent is collapsed */
+.bar.rollup {
+  background: transparent;
+  background-image: repeating-linear-gradient(45deg,
+    rgba(14, 124, 134, 0.12) 0 6px, transparent 6px 12px);
+  border: 1.5px solid var(--accent);
+  color: var(--accent-deep);
+  cursor: pointer;
+}
+.bar.rollup:hover { box-shadow: 0 2px 10px rgba(9, 86, 94, 0.22); }
+.bar.rollup .bar-label { font-weight: 600; }
+.row.hl .bar.rollup {
+  background-image: repeating-linear-gradient(45deg,
+    rgba(240, 163, 47, 0.18) 0 6px, transparent 6px 12px);
+  border-color: var(--amber);
+  color: #8a5c10;
+}
 
 /* snap ghost — original position shown while dragging */
 .ghost {
