@@ -125,6 +125,19 @@ button { font: inherit; color: inherit; }
   font-weight: 600;
 }
 
+/* config selector */
+select.cfg {
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  cursor: pointer;
+  font: inherit;
+  max-width: 180px;
+  color: var(--ink);
+}
+select.cfg:hover { border-color: var(--accent); }
+
 /* ---------- Popovers (highlight / filter) ---------- */
 .popover {
   position: fixed;
