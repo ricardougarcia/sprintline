@@ -9,7 +9,7 @@
   const T_END = Date.UTC(2028, 1, 1);         // exclusive: Feb 1 2028
   const DAY = 86400000;
   const SPRINT_DAYS = 14;
-  const ZOOMS = { sprint: 36, month: 18, quarter: 9 }; // px per sprint
+  const ZOOMS = { sprint: 36, month: 18, fit: null }; // px per sprint; fit = computed from viewport
   const TOTAL_SPRINTS = Math.floor((T_END - T0) / DAY / SPRINT_DAYS); // 39
   const ROW_H = 44;
   const LEFT_W = 300;
@@ -47,15 +47,25 @@
       if (!raw) return null;
       const s = JSON.parse(raw);
       if (!s || !Array.isArray(s.items)) return null;
-      if (!ZOOMS[s.zoom]) s.zoom = "sprint";
+      if (s.zoom === "quarter") s.zoom = "fit";
+      if (!(s.zoom in ZOOMS)) s.zoom = "sprint";
       if (!Array.isArray(s.collapsed)) s.collapsed = [];
       return s;
     } catch (e) { return null; }
   }
 
   function applyZoom() {
-    SPRINT_W = ZOOMS[state.zoom] || ZOOMS.sprint;
-    PX_PER_DAY = SPRINT_W / SPRINT_DAYS;
+    if (state.zoom === "fit") {
+      // fill the viewport: whole timeline visible, no horizontal scroll
+      const boardEl = document.getElementById("board");
+      const avail = Math.max(240, (boardEl ? boardEl.clientWidth : window.innerWidth) - LEFT_W - 2);
+      const totalDays = (T_END - T0) / DAY;
+      PX_PER_DAY = avail / totalDays;
+      SPRINT_W = PX_PER_DAY * SPRINT_DAYS;
+    } else {
+      SPRINT_W = ZOOMS[state.zoom] || ZOOMS.sprint;
+      PX_PER_DAY = SPRINT_W / SPRINT_DAYS;
+    }
     TIMELINE_W = Math.round((T_END - T0) / DAY * PX_PER_DAY);
     document.documentElement.style.setProperty("--sprint-w", SPRINT_W + "px");
   }
@@ -274,13 +284,13 @@
     scale.style.width = TIMELINE_W + "px";
 
     const qs = quarterStarts();
-    const quarterZoom = state.zoom === "quarter";
+    const denseMonths = SPRINT_W < 14; // month labels collide below ~14px/sprint
     let d = new Date(T0);
     while (d.getTime() < T_END) {
       const x = (d.getTime() - T0) / DAY * PX_PER_DAY;
       const isQ = qs.some(q => q.t === d.getTime());
       // at quarter zoom, month labels collide — keep only quarter starts (and T0)
-      if (!quarterZoom || isQ || d.getTime() === T0) {
+      if (!denseMonths || isQ || d.getTime() === T0) {
         const m = document.createElement("div");
         m.className = "month" + (isQ ? " q-start" : "");
         m.style.left = x + "px";
@@ -290,8 +300,8 @@
       }
       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
     }
-    // quarter tags only at full sprint zoom; below that they collide with months
-    if (state.zoom === "sprint") {
+    // quarter tags need room; below ~30px/sprint they collide with month labels
+    if (SPRINT_W >= 30) {
       qs.forEach(q => {
         const tag = document.createElement("div");
         tag.className = "q-tag";
@@ -899,5 +909,12 @@
   });
 
   // ---------- go ----------
+  let resizeT;
+  window.addEventListener("resize", () => {
+    if (state.zoom !== "fit") return;
+    clearTimeout(resizeT);
+    resizeT = setTimeout(() => { applyZoom(); render(); }, 120);
+  });
+
   render();
 })();
