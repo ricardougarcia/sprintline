@@ -9,7 +9,10 @@
   const T_END = Date.UTC(2028, 1, 1);         // exclusive: Feb 1 2028
   const DAY = 86400000;
   const SPRINT_DAYS = 14;
-  const ZOOMS = { sprint: 36, month: 18, fit: null }; // px per sprint; fit = computed from viewport
+  // zoom = fraction of the full timeline visible at once; px/sprint derives from viewport
+  const ZOOM_LEVELS = ["sprint", "month", "fit"];
+  const ZOOM_FRACTION = { sprint: 0.25, month: 0.5, fit: 1 };
+  const ZOOM_MIN_W = { sprint: 32, month: 16, fit: 6 }; // px/sprint floor for narrow screens
   const TOTAL_SPRINTS = Math.floor((T_END - T0) / DAY / SPRINT_DAYS); // 39
   const ROW_H = 44;
   const LEFT_W = 300;
@@ -17,7 +20,7 @@
   const STORE_KEY = "sprintline-v1";
 
   // zoom-dependent metrics (set by applyZoom)
-  let SPRINT_W = ZOOMS.sprint;
+  let SPRINT_W = 36; // provisional until applyZoom() runs
   let PX_PER_DAY = SPRINT_W / SPRINT_DAYS;
   let TIMELINE_W = Math.round((T_END - T0) / DAY * PX_PER_DAY);
 
@@ -36,8 +39,9 @@
       deps: [],                    // [{from, to}]
       highlight: [],               // ["Column||value", ...]
       filter: [],
-      zoom: "sprint",              // "sprint" | "month" | "quarter"
-      collapsed: []                // parent Keys whose children are hidden
+      zoom: "sprint",              // "sprint" | "month" | "fit" (all viewport-relative)
+      collapsed: [],               // parent Keys whose children are hidden
+      configs: {}                  // named saved snapshots: { title: {savedAt, data} }
     };
   }
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
@@ -48,25 +52,24 @@
       const s = JSON.parse(raw);
       if (!s || !Array.isArray(s.items)) return null;
       if (s.zoom === "quarter") s.zoom = "fit";
-      if (!(s.zoom in ZOOMS)) s.zoom = "sprint";
+      if (!ZOOM_LEVELS.includes(s.zoom)) s.zoom = "sprint";
+      if (!s.configs || typeof s.configs !== "object") s.configs = {};
       if (!Array.isArray(s.collapsed)) s.collapsed = [];
       return s;
     } catch (e) { return null; }
   }
 
   function applyZoom() {
-    if (state.zoom === "fit") {
-      // fill the viewport: whole timeline visible, no horizontal scroll
-      const boardEl = document.getElementById("board");
-      const avail = Math.max(240, (boardEl ? boardEl.clientWidth : window.innerWidth) - LEFT_W - 2);
-      const totalDays = (T_END - T0) / DAY;
-      PX_PER_DAY = avail / totalDays;
-      SPRINT_W = PX_PER_DAY * SPRINT_DAYS;
-    } else {
-      SPRINT_W = ZOOMS[state.zoom] || ZOOMS.sprint;
-      PX_PER_DAY = SPRINT_W / SPRINT_DAYS;
-    }
-    TIMELINE_W = Math.round((T_END - T0) / DAY * PX_PER_DAY);
+    // every zoom level fills the viewport: Fit shows the whole timeline,
+    // Month shows ~half of it, Sprint ~a quarter (scroll for the rest)
+    const boardEl = document.getElementById("board");
+    const avail = Math.max(320, (boardEl ? boardEl.clientWidth : window.innerWidth) - LEFT_W - 2);
+    const f = ZOOM_FRACTION[state.zoom] || 1;
+    const totalDays = (T_END - T0) / DAY;
+    const minPerDay = (ZOOM_MIN_W[state.zoom] || 6) / SPRINT_DAYS;
+    PX_PER_DAY = Math.max((avail / f) / totalDays, minPerDay);
+    SPRINT_W = PX_PER_DAY * SPRINT_DAYS;
+    TIMELINE_W = Math.round(totalDays * PX_PER_DAY);
     document.documentElement.style.setProperty("--sprint-w", SPRINT_W + "px");
   }
 
@@ -258,6 +261,7 @@
     updateFacetCounts();
     syncZoomSeg();
     updateCollapseBtn();
+    updateCfgSelect();
   }
 
   function quarterStarts() {
@@ -768,6 +772,62 @@
       save(); render();
     }));
 
+  // ---------- named configs ----------
+  const CONFIG_KEYS = ["items", "deps", "highlight", "filter", "zoom", "collapsed"];
+  const snapshot = () => JSON.parse(JSON.stringify(
+    Object.fromEntries(CONFIG_KEYS.map(k => [k, state[k]]))));
+
+  function updateCfgSelect() {
+    const sel = $("#cfgSelect");
+    if (!sel) return;
+    const names = Object.keys(state.configs).sort((a, b) => a.localeCompare(b));
+    sel.innerHTML = `<option value="">Configs (${names.length}) \u25be</option>` +
+      names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("") +
+      (names.length ? `<option value="__del">\u2716 Delete a config\u2026</option>` : "");
+    sel.value = "";
+  }
+
+  $("#saveCfgBtn").addEventListener("click", () => {
+    const existing = Object.keys(state.configs);
+    const name = (window.prompt(
+      "Name this config" + (existing.length ? " (reuse a name to overwrite it):\n\u2022 " + existing.join("\n\u2022 ") : ":"),
+      "") || "").trim();
+    if (!name) return;
+    if (name === "__del") { toast("That name is reserved \u2014 pick another"); return; }
+    const overwrote = !!state.configs[name];
+    state.configs[name] = { savedAt: Date.now(), data: snapshot() };
+    save(); updateCfgSelect();
+    toast(overwrote ? `Updated config \u201c${name}\u201d` : `Saved config \u201c${name}\u201d`);
+  });
+
+  $("#cfgSelect").addEventListener("change", e => {
+    const v = e.target.value;
+    e.target.value = "";
+    if (!v) return;
+    if (v === "__del") {
+      const name = (window.prompt(
+        "Type the exact name of the config to delete:\n\u2022 " +
+        Object.keys(state.configs).join("\n\u2022 "), "") || "").trim();
+      if (!name) return;
+      if (!state.configs[name]) { toast(`No config named \u201c${name}\u201d`); return; }
+      delete state.configs[name];
+      save(); updateCfgSelect();
+      toast(`Deleted config \u201c${name}\u201d`);
+      return;
+    }
+    const cfg = state.configs[v];
+    if (!cfg) return;
+    if (!window.confirm(
+      `Load config \u201c${v}\u201d?\n\nThe board will switch to that version. ` +
+      `Unsaved changes to the current board will be lost \u2014 use Save config first if you want to keep them.`)) return;
+    closeDrawer();
+    Object.assign(state, JSON.parse(JSON.stringify(cfg.data)));
+    if (!ZOOM_LEVELS.includes(state.zoom)) state.zoom = "sprint";
+    applyZoom();
+    save(); render();
+    toast(`Loaded config \u201c${v}\u201d \u2014 Download CSV now exports this version`);
+  });
+
   $("#collapseBtn").addEventListener("click", () => {
     const parents = allParentKeys();
     if (!parents.length) {
@@ -911,7 +971,6 @@
   // ---------- go ----------
   let resizeT;
   window.addEventListener("resize", () => {
-    if (state.zoom !== "fit") return;
     clearTimeout(resizeT);
     resizeT = setTimeout(() => { applyZoom(); render(); }, 120);
   });
