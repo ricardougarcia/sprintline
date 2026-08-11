@@ -9,14 +9,17 @@
   const T_END = Date.UTC(2028, 1, 1);         // exclusive: Feb 1 2028
   const DAY = 86400000;
   const SPRINT_DAYS = 14;
-  const SPRINT_W = 36;                        // px per sprint
-  const PX_PER_DAY = SPRINT_W / SPRINT_DAYS;
+  const ZOOMS = { sprint: 36, month: 18, quarter: 9 }; // px per sprint
   const TOTAL_SPRINTS = Math.floor((T_END - T0) / DAY / SPRINT_DAYS); // 39
-  const TIMELINE_W = Math.round((T_END - T0) / DAY * PX_PER_DAY);
   const ROW_H = 44;
   const LEFT_W = 300;
   const HEADER_H = 50;
   const STORE_KEY = "sprintline-v1";
+
+  // zoom-dependent metrics (set by applyZoom)
+  let SPRINT_W = ZOOMS.sprint;
+  let PX_PER_DAY = SPRINT_W / SPRINT_DAYS;
+  let TIMELINE_W = Math.round((T_END - T0) / DAY * PX_PER_DAY);
 
   const FIELDS = ["Summary", "Assignee", "Status", "Theme", "Delivery Quarter",
     "Teams", "Delivery progress", "Key", "Effort", "Impact", "Parent"];
@@ -32,7 +35,9 @@
       items: JSON.parse(JSON.stringify(window.DEFAULT_ITEMS)),
       deps: [],                    // [{from, to}]
       highlight: [],               // ["Column||value", ...]
-      filter: []
+      filter: [],
+      zoom: "sprint",              // "sprint" | "month" | "quarter"
+      collapsed: []                // parent Keys whose children are hidden
     };
   }
   function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
@@ -41,8 +46,18 @@
       const raw = localStorage.getItem(STORE_KEY);
       if (!raw) return null;
       const s = JSON.parse(raw);
-      return (s && Array.isArray(s.items)) ? s : null;
+      if (!s || !Array.isArray(s.items)) return null;
+      if (!ZOOMS[s.zoom]) s.zoom = "sprint";
+      if (!Array.isArray(s.collapsed)) s.collapsed = [];
+      return s;
     } catch (e) { return null; }
+  }
+
+  function applyZoom() {
+    SPRINT_W = ZOOMS[state.zoom] || ZOOMS.sprint;
+    PX_PER_DAY = SPRINT_W / SPRINT_DAYS;
+    TIMELINE_W = Math.round((T_END - T0) / DAY * PX_PER_DAY);
+    document.documentElement.style.setProperty("--sprint-w", SPRINT_W + "px");
   }
 
   // ---------- date helpers ----------
@@ -55,6 +70,66 @@
     const a = sprintDate(it.start), b = new Date(sprintDate(it.start + it.len) - DAY);
     return `S${it.start}\u2013S${it.start + it.len - 1} \u00b7 ${fmt(a)} \u2192 ${fmt(b)} \u00b7 ${it.len} sprint${it.len > 1 ? "s" : ""}`;
   };
+
+  // ---------- parent / rollup helpers ----------
+  const keyOf = it => (it.fields.Key || "").trim();
+  const parentKeyOf = it => {
+    const p = (it.fields.Parent || "none").trim();
+    return p && p !== "none" ? p : null;
+  };
+  const isParent = it => {
+    const k = keyOf(it);
+    return !!k && state.items.some(x => x !== it && parentKeyOf(x) === k);
+  };
+  const isCollapsed = it => isParent(it) && state.collapsed.includes(keyOf(it));
+
+  function descendants(it, acc = [], seen = new Set()) {
+    const k = keyOf(it);
+    if (!k || seen.has(it.id)) return acc;
+    seen.add(it.id);
+    state.items.forEach(x => {
+      if (x !== it && parentKeyOf(x) === k && !seen.has(x.id)) {
+        acc.push(x);
+        descendants(x, acc, seen);
+      }
+    });
+    return acc;
+  }
+
+  function rollupSpan(it) {
+    let s = it.start, e = it.start + it.len;
+    descendants(it).forEach(k => {
+      s = Math.min(s, k.start);
+      e = Math.max(e, k.start + k.len);
+    });
+    return { start: s, len: Math.max(1, e - s) };
+  }
+
+  function depthOf(it) {
+    let d = 0, cur = it;
+    const seen = new Set([it.id]);
+    while (d < 3) {
+      const pk = parentKeyOf(cur);
+      if (!pk) break;
+      const p = state.items.find(x => keyOf(x) === pk);
+      if (!p || seen.has(p.id)) break;
+      seen.add(p.id);
+      d++; cur = p;
+    }
+    return d;
+  }
+
+  const allParentKeys = () =>
+    [...new Set(state.items.filter(isParent).map(keyOf))];
+
+  // geometry that respects collapsed rollups (used by dependency arrows)
+  function geom(it) {
+    if (isCollapsed(it)) {
+      const r = rollupSpan(it);
+      return { x: r.start * SPRINT_W, w: r.len * SPRINT_W };
+    }
+    return { x: barX(it), w: barW(it) };
+  }
 
   // ---------- facet helpers ----------
   function facetValues(it, col) {
@@ -79,6 +154,38 @@
   const isHighlighted = it => state.highlight.length && matches(it, state.highlight);
   const visibleItems = () => state.items.filter(it => matches(it, state.filter));
 
+  // Display list: filtered, grouped (children directly after their parent),
+  // with collapsed subtrees removed. This is the row order everything renders in.
+  function displayItems() {
+    const visIds = new Set(visibleItems().map(x => x.id));
+    const byKey = new Map();
+    state.items.forEach(x => { const k = keyOf(x); if (k && !byKey.has(k)) byKey.set(k, x); });
+
+    const emitted = new Set();
+    const out = [];
+
+    const emit = (it, hidden) => {
+      if (emitted.has(it.id)) return;
+      emitted.add(it.id);
+      if (!hidden && visIds.has(it.id)) out.push(it);
+      const k = keyOf(it);
+      if (!k) return;
+      const childHidden = hidden || state.collapsed.includes(k);
+      state.items.forEach(x => {
+        if (x !== it && parentKeyOf(x) === k) emit(x, childHidden);
+      });
+    };
+
+    // top level: items with no resolvable parent
+    state.items.forEach(it => {
+      const pk = parentKeyOf(it);
+      if (!pk || !byKey.has(pk)) emit(it, false);
+    });
+    // safety net for parent cycles: anything untouched renders at the end
+    state.items.forEach(it => emit(it, false));
+    return out;
+  }
+
   // ---------- DOM refs ----------
   const $ = sel => document.querySelector(sel);
   const board = $("#board");
@@ -86,7 +193,7 @@
   const dragTip = $("#dragTip");
   const toastEl = $("#toast");
 
-  document.documentElement.style.setProperty("--sprint-w", SPRINT_W + "px");
+  applyZoom();
 
   function toast(msg) {
     toastEl.textContent = msg;
@@ -97,7 +204,7 @@
 
   // ---------- render ----------
   function render() {
-    const items = visibleItems();
+    const items = displayItems();
     inner.style.width = (LEFT_W + TIMELINE_W) + "px";
     inner.innerHTML = "";
     inner.appendChild(buildAxis());
@@ -139,6 +246,8 @@
 
     inner.appendChild(rows);
     updateFacetCounts();
+    syncZoomSeg();
+    updateCollapseBtn();
   }
 
   function quarterStarts() {
@@ -165,33 +274,43 @@
     scale.style.width = TIMELINE_W + "px";
 
     const qs = quarterStarts();
+    const quarterZoom = state.zoom === "quarter";
     let d = new Date(T0);
     while (d.getTime() < T_END) {
       const x = (d.getTime() - T0) / DAY * PX_PER_DAY;
       const isQ = qs.some(q => q.t === d.getTime());
-      const m = document.createElement("div");
-      m.className = "month" + (isQ ? " q-start" : "");
-      m.style.left = x + "px";
-      m.textContent = d.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }) +
-        (d.getUTCMonth() === 0 || d.getTime() === T0 ? " \u2019" + String(d.getUTCFullYear()).slice(2) : "");
-      scale.appendChild(m);
+      // at quarter zoom, month labels collide — keep only quarter starts (and T0)
+      if (!quarterZoom || isQ || d.getTime() === T0) {
+        const m = document.createElement("div");
+        m.className = "month" + (isQ ? " q-start" : "");
+        m.style.left = x + "px";
+        m.textContent = d.toLocaleDateString("en-US", { month: "short", timeZone: "UTC" }) +
+          (d.getUTCMonth() === 0 || d.getTime() === T0 ? " \u2019" + String(d.getUTCFullYear()).slice(2) : "");
+        scale.appendChild(m);
+      }
       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
     }
-    qs.forEach(q => {
-      const tag = document.createElement("div");
-      tag.className = "q-tag";
-      tag.style.left = (q.x + 44) + "px";
-      tag.textContent = q.label;
-      scale.appendChild(tag);
-    });
+    // quarter tags only at full sprint zoom; below that they collide with months
+    if (state.zoom === "sprint") {
+      qs.forEach(q => {
+        const tag = document.createElement("div");
+        tag.className = "q-tag";
+        tag.style.left = (q.x + 44) + "px";
+        tag.textContent = q.label;
+        scale.appendChild(tag);
+      });
+    }
 
     const ruler = document.createElement("div");
     ruler.className = "sprints";
+    const labelEvery = SPRINT_W >= 30 ? 2 : SPRINT_W >= 16 ? 4 : 8;
+    const tickEvery = SPRINT_W >= 16 ? 1 : 2;
     for (let s = 0; s < TOTAL_SPRINTS; s++) {
+      if (s % tickEvery !== 0) continue;
       const t = document.createElement("div");
       t.className = "sprint-tick";
       t.style.left = (s * SPRINT_W) + "px";
-      if (s % 2 === 0) t.textContent = "S" + s;
+      if (s % labelEvery === 0) t.textContent = "S" + s;
       ruler.appendChild(t);
     }
     scale.appendChild(ruler);
@@ -200,23 +319,38 @@
   }
 
   function buildRow(it) {
+    const parent = isParent(it);
+    const collapsed = isCollapsed(it);
+    const depth = depthOf(it);
+
     const row = document.createElement("div");
-    row.className = "row" + (isHighlighted(it) ? " hl" : "");
+    row.className = "row" + (isHighlighted(it) ? " hl" : "") + (parent ? " parent" : "");
     row.dataset.id = it.id;
 
     const label = document.createElement("div");
-    label.className = "row-label";
-    const parent = it.fields.Parent && it.fields.Parent !== "none"
-      ? ` \u00b7 <span class="parent">\u2934 ${esc(it.fields.Parent)}</span>` : "";
+    label.className = "row-label" + (depth ? " child-" + Math.min(depth, 3) : "");
+    const parentTag = parentKeyOf(it)
+      ? ` \u00b7 <span class="parent">\u2934 ${esc(parentKeyOf(it))}</span>` : "";
+    const twist = parent
+      ? `<button class="twist" title="${collapsed ? "Expand" : "Collapse"} children">${collapsed ? "\u25B8" : "\u25BE"}</button>`
+      : "";
+    const badge = parent
+      ? `<span class="badge" title="Items rolled up under this parent">${descendants(it).length}</span>` : "";
     label.innerHTML =
-      `<span class="grip" title="Drag to reorder">\u2af6</span>
+      `<span class="grip" title="Drag to reorder">\u2af6</span>${twist}
        <div class="row-title">
          <div class="t" title="${esc(it.fields.Summary)}">${esc(it.fields.Summary) || "(untitled)"}</div>
-         <div class="k">${esc(it.fields.Key)}${parent}</div>
+         <div class="k">${esc(it.fields.Key)}${badge}${parentTag}</div>
        </div>`;
     label.querySelector(".grip").addEventListener("pointerdown", e => startReorder(e, it.id));
+    if (parent) {
+      label.querySelector(".twist").addEventListener("click", e => {
+        e.stopPropagation();
+        toggleCollapse(keyOf(it));
+      });
+    }
     label.addEventListener("click", e => {
-      if (!e.target.classList.contains("grip")) openDrawer(it.id);
+      if (!e.target.classList.contains("grip") && !e.target.classList.contains("twist")) openDrawer(it.id);
     });
     row.appendChild(label);
 
@@ -225,22 +359,55 @@
     lane.style.width = TIMELINE_W + "px";
     lane.dataset.id = it.id;
 
-    const bar = document.createElement("div");
-    bar.className = "bar";
-    bar.dataset.id = it.id;
-    bar.style.left = barX(it) + "px";
-    bar.style.width = barW(it) + "px";
-    bar.title = spanText(it);
-    bar.innerHTML =
-      `<span class="bar-label">${esc(it.fields.Key)}</span>
-       <span class="resize" title="Drag to resize (2-week sprints)"></span>
-       <span class="dot" title="Drag to another item to add a dependency"></span>`;
-    bar.addEventListener("pointerdown", e => startBarDrag(e, it.id, "move"));
-    bar.querySelector(".resize").addEventListener("pointerdown", e => { e.stopPropagation(); startBarDrag(e, it.id, "resize"); });
-    bar.querySelector(".dot").addEventListener("pointerdown", e => { e.stopPropagation(); startLinkDrag(e, it.id); });
-    lane.appendChild(bar);
+    if (collapsed) {
+      // derived rollup bar: spans parent + all descendants; click to expand
+      const r = rollupSpan(it);
+      const bar = document.createElement("div");
+      bar.className = "bar rollup";
+      bar.dataset.id = it.id;
+      bar.style.left = (r.start * SPRINT_W) + "px";
+      bar.style.width = (r.len * SPRINT_W) + "px";
+      bar.title = `Rollup of ${descendants(it).length} item(s) \u00b7 ` +
+        spanText({ start: r.start, len: r.len }) + " \u00b7 click to expand";
+      bar.innerHTML = `<span class="bar-label">${esc(it.fields.Key || it.fields.Summary)} \u00b7 ${descendants(it).length}</span>`;
+      bar.addEventListener("click", e => {
+        e.stopPropagation();
+        toggleCollapse(keyOf(it));
+      });
+      lane.appendChild(bar);
+    } else {
+      const bar = document.createElement("div");
+      bar.className = "bar";
+      bar.dataset.id = it.id;
+      bar.style.left = barX(it) + "px";
+      bar.style.width = barW(it) + "px";
+      bar.title = spanText(it);
+      bar.innerHTML =
+        `<span class="bar-label">${esc(it.fields.Key)}</span>
+         <span class="resize" title="Drag to resize (2-week sprints)"></span>
+         <span class="dot" title="Drag to another item to add a dependency"></span>`;
+      bar.addEventListener("pointerdown", e => startBarDrag(e, it.id, "move"));
+      bar.querySelector(".resize").addEventListener("pointerdown", e => { e.stopPropagation(); startBarDrag(e, it.id, "resize"); });
+      bar.querySelector(".dot").addEventListener("pointerdown", e => { e.stopPropagation(); startLinkDrag(e, it.id); });
+      lane.appendChild(bar);
+    }
     row.appendChild(lane);
     return row;
+  }
+
+  function toggleCollapse(key) {
+    if (!key) return;
+    if (state.collapsed.includes(key)) state.collapsed = state.collapsed.filter(k => k !== key);
+    else state.collapsed.push(key);
+    save(); render();
+  }
+
+  function updateCollapseBtn() {
+    const btn = $("#collapseBtn");
+    if (!btn) return;
+    const parents = allParentKeys();
+    const allDown = parents.length && parents.every(k => state.collapsed.includes(k));
+    btn.textContent = allDown ? "Expand parents" : "Collapse parents";
   }
 
   function esc(s) {
@@ -252,13 +419,14 @@
   function drawDeps(svg, items) {
     const idx = new Map(items.map((it, i) => [it.id, i]));
     state.deps.forEach((d, di) => {
-      if (!idx.has(d.from) || !idx.has(d.to)) return; // hidden by filter
+      if (!idx.has(d.from) || !idx.has(d.to)) return; // hidden by filter or collapse
       const a = state.items.find(x => x.id === d.from);
       const b = state.items.find(x => x.id === d.to);
       const y1 = idx.get(d.from) * ROW_H + ROW_H / 2;
       const y2 = idx.get(d.to) * ROW_H + ROW_H / 2;
-      const x1 = barX(a) + barW(a);
-      const x2 = barX(b);
+      const ga = geom(a), gb = geom(b);
+      const x1 = ga.x + ga.w;
+      const x2 = gb.x;
       const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
       p.classList.add("dep");
       p.dataset.di = di;
@@ -299,7 +467,7 @@
     e.preventDefault();
     const svg = $("#depSvg");
     const from = state.items.find(x => x.id === fromId);
-    const items = visibleItems();
+    const items = displayItems();
     const idx = new Map(items.map((it, i) => [it.id, i]));
     const x1 = barX(from) + barW(from);
     const y1 = idx.get(fromId) * ROW_H + ROW_H / 2;
@@ -397,7 +565,7 @@
     const svg = $("#depSvg");
     if (!svg) return;
     svg.innerHTML = "";
-    drawDeps(svg, visibleItems());
+    drawDeps(svg, displayItems());
   }
 
   // ---------- row reorder ----------
@@ -409,7 +577,7 @@
     const move = ev => {
       const rowsEl = inner.querySelector(".rows");
       const top = rowsEl.getBoundingClientRect().top;
-      const vis = visibleItems();
+      const vis = displayItems();
       const targetVis = clamp(Math.floor((ev.clientY - top) / ROW_H), 0, vis.length - 1);
       const curVis = vis.findIndex(x => x.id === id);
       if (targetVis === curVis || curVis < 0) return;
@@ -577,6 +745,31 @@
     $("#fltCount").style.display = state.filter.length ? "" : "none";
   }
 
+  // ---------- zoom + collapse controls ----------
+  function syncZoomSeg() {
+    document.querySelectorAll("#zoomSeg button").forEach(b =>
+      b.classList.toggle("on", b.dataset.z === state.zoom));
+  }
+  document.querySelectorAll("#zoomSeg button").forEach(b =>
+    b.addEventListener("click", () => {
+      if (state.zoom === b.dataset.z) return;
+      state.zoom = b.dataset.z;
+      applyZoom();
+      save(); render();
+    }));
+
+  $("#collapseBtn").addEventListener("click", () => {
+    const parents = allParentKeys();
+    if (!parents.length) {
+      toast("No parent items yet \u2014 set an item's Parent field to group it");
+      return;
+    }
+    const allDown = parents.every(k => state.collapsed.includes(k));
+    state.collapsed = allDown ? [] : parents;
+    save(); render();
+    toast(allDown ? "Expanded all parents" : `Collapsed ${parents.length} parent group(s)`);
+  });
+
   // ---------- CSV ----------
   function parseCSV(text) {
     const rows = [];
@@ -671,6 +864,7 @@
     state.deps = deps;
     state.highlight = [];
     state.filter = [];
+    state.collapsed = [];
     save(); render();
     toast(`Loaded ${items.length} items from CSV`);
   }
@@ -699,6 +893,7 @@
     if (!window.confirm("Reset to the built-in Idea Board dataset? Your edits will be lost.")) return;
     localStorage.removeItem(STORE_KEY);
     state = freshState();
+    applyZoom();
     render();
     toast("Reset to default dataset");
   });
